@@ -1,0 +1,32 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: viamao_postgres
+    environment:
+      POSTGRES_DB: viamao_db
+      POSTGRES_USER: viamao_user
+      POSTGRES_PASSWORD: viamao_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: viamao_redis
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: viamao_rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+volumes:
+  pgdata:
