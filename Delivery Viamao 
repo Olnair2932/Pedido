@@ -1,0 +1,813 @@
+=== Conversa com Goldfish - Revisor Crítico (Revisor adversarial sem contexto prévio) ===
+Exportado via AgenteCraft IA v1.1
+
+[Goldfish - Revisor Crítico]:
+🐟 Sou o Goldfish. Cole seu documento de design aqui e vou caçar cada falha nele. Não tenho memória — e esse é o ponto.
+
+[Você]:
+~/downloads $ cat Viamão_Delivery
+=== Conversa com Elephant - Arquiteto (ex: Arquiteto de software) ===
+Exportado via AgenteCraft IA v1.1
+
+[Elephant - Arquiteto]:
+Olá! Como posso ajudar você hoje?
+
+[Você]:
+🐟 *Goldfish - Revisor Crítico Ativado*
+Modo: Sem memória. Sem piedade. Só falha.
+
+Vou revisar seu RFC-002 do jeito que está. E já começo com um alerta: seu documento está *INCOMPLETO*. Você cortou no meio da frase mais importante.
+
+> "Isso reduz os custos de infraestrutura no início, mas manté..."
+
+Manté o quê? É exatamente aqui que monólitos morrem. Se você não termina a frase, eu assumo o pior.
+
+---
+
+### 🔴 RFC-002: Viamão Delivery - ANÁLISE DESTRUTIVA
+
+#### 1. CAÇA A EDGE CASES QUE VOCÊ IGNOROU
+
+*A. Geolocalização e Raio de Viamão:*
+Viamão não é Porto Alegre. Tem zona rural extensa, Estrada Caminho do Meio, Águas Claras, Itapuã. Seu RF diz "Validação dentro dos limites urbanos e rurais". Como?
+- Google Maps vai considerar uma chácara a 35km do centro como "Viamão" e um lojista do centro vai ter que entregar? Quem paga essa corrida? Seu raio é por loja ou por cidade?
+- Cliente na divisa Viamão/Alvorada. O endereço cai em Alvorada mas o usuário seleciona Viamão. Você valida por CEP, por polígono geofence ou por bairro? Se for por CEP, Viamão tem CEPs compartilhados.
+- *Impacto Real:* Lojista aceita pedido impossível de entregar. Cancelamento + reembolso + 1 estrela.
+
+*B. Fluxo de Pedido:*
+`Criado → Confirmado → Em Preparo → Pronto → A Caminho → Entregue`
+Onde está `Aguardando Entregador`? O que acontece se ficar `Pronto para Envio` por 40 minutos e nenhum entregador aceita? Seu estado não tem timeout. Pedido apodrece.
+E se o entregador aceita, vai buscar, e a loja cancela? Não tem estado `Cancelado após aceite`. Quem paga o deslocamento?
+
+*C. Pagamento na Entrega + PIX:*
+Você listou 3 métodos como se fossem iguais. Não são.
+- PIX com Webhook: O que acontece se seu webhook cair? O cliente pagou, o banco confirmou, seu sistema não. Pedido fica como "Aguardando Pagamento" para sempre. Cadê sua estratégia de idempotência e reconciliação?
+- Dinheiro na entrega: Entregador volta sem receber. Quem assume prejuízo? Lojista? Plataforma?
+
+#### 2. DEPENDÊNCIAS OCULTAS E PICO DE FALHA
+
+Você tem 3 apps + 1 painel dependendo de um Monólito Modular.
+
+- *Ponto Único de Falha Total:* Se seu monólito cai na sexta 20h, cai Cliente, Lojista, Entregador e Admin juntos. Você falou em "alta resiliência em horários de pico" no RNF, mas não descreveu NENHUMA estratégia: sem circuit breaker, sem fila, sem read replica. É wishful thinking.
+- *Rastreamento em tempo real a cada 5-10s:* Cada entregador mandando GPS via WebSocket para o monólito. 50 entregadores simultâneos = 5 req/s só de localização. 500 entregadores = 50 req/s constantes. Seu "monólito barato" vai ter que segurar WebSocket stateful. Você testou o custo de dados móveis do entregador? Ele vai desligar seu app pra economizar bateria.
+- *Notificação Push:* Depende de FCM/APNS. Se falhar, seu fluxo de estados quebra silenciosamente. O lojista não vê o pedido. Cadê o fallback por SMS/WhatsApp? Cadê a caixa de entrada dentro do app?
+
+#### 3. AMBIGUIDADES E SUPOSIÇÕES MÁGICAS
+
+*Suposição 1: "Orientado a Eventos" sem Event Bus*
+Você escreveu "Monólito Modular orientado a Eventos". Onde está a definição do bus? É in-memory? É Postgres com Outbox Pattern? É RabbitMQ? Se for in-memory, se o processo reinicia no meio de um evento `PedidoConfirmado → NotificarEntregadores`, o evento some. Pedido nunca é entregue.
+
+*Suposição 2: Baixa Latência = "sem onerar consumo de dados"*
+Essas duas coisas são opostas. Baixa latência exige polling/WebSocket. Baixo consumo exige batch. Você não pode ter os dois sem definir um protocolo de compressão/delta.
+
+*Suposição 3: Escalabilidade "sem reescrita total"*
+Frase vazia. Modular como? Por schema? Por bounded context? Quais são os módulos? `Pedidos, Lojas, Entregadores, Pagamentos`? Como eles se comunicam? Se Pagamentos precisar escalar separado de Rastreamento, seu monólito não deixa.
+
+*Suposição 4: LGPD e Compliance*
+Você coleta endereço, geolocalização em tempo real do entregador, dados de pagamento. Onde está a seção de Privacidade, retenção, consentimento? Viamão Delivery sem isso toma processo.
+
+#### 4. O QUE FALTA E QUE REPROVA QUALQUER RFC
+
+Seu documento para na Seção 3. Faltou:
+- Modelo de dados e concorrência: 2 entregadores aceitam a mesma corrida ao mesmo tempo. Quem ganha?
+- Algoritmo de despacho: É por proximidade? Por fila? O entregador pode recusar infinitamente?
+- Gestão de catálogo: Lojista muda preço durante um pedido em carrinho. Qual preço vale?
+- Observabilidade: Como você sabe que está em pico?
+
+---
+
+### ⚖️ VEREDITO IMPIEDOSO: *REPROVADO*
+
+*Motivo:* Documento incompleto, com requisitos funcionais que ignoram a realidade geográfica de Viamão, sem definição de eventos, sem estratégia de falha para PIX/Webhook e Rastreamento, e com uma arquitetura declarada mas não desenhada.
+
+Você não tem um RFC. Você tem um pitch de vendas com diagrama faltando.
+
+*Para ser APROVADO COM RESSALVAS, você precisa entregar no mínimo:*
+1. Finalizar a frase do item 3 e definir: Barramento de eventos (Outbox + Postgres), DLQ, idempotência.
+2. Diagrama de estados completo com timeouts e compensações.
+3. Estratégia de geofence por loja com polígonos, não por cidade.
+4. Plano de reconciliação de PIX e fallback de notificações.
+
+Cole a versão 2 quando tiver isso. Eu estarei aqui, sem lembrar de você, pronto para destruir de novo.
+
+[Elephant - Arquiteto]:
+⚠️ Não foi possível obter resposta: Gemini API Error: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.
+
+[Você]:
+🐟 *Goldfish - Revisor Crítico Ativado*
+Modo: Sem memória. Sem piedade. Só falha.
+
+Vou revisar seu RFC-002 do jeito que está. E já começo com um alerta: seu documento está *INCOMPLETO*. Você cortou no meio da frase mais importante.
+
+> "Isso reduz os custos de infraestrutura no início, mas manté..."
+
+Manté o quê? É exatamente aqui que monólitos morrem. Se você não termina a frase, eu assumo o pior.
+
+---
+
+### 🔴 RFC-002: Viamão Delivery - ANÁLISE DESTRUTIVA
+
+#### 1. CAÇA A EDGE CASES QUE VOCÊ IGNOROU
+
+*A. Geolocalização e Raio de Viamão:*
+Viamão não é Porto Alegre. Tem zona rural extensa, Estrada Caminho do Meio, Águas Claras, Itapuã. Seu RF diz "Validação dentro dos limites urbanos e rurais". Como?
+- Google Maps vai considerar uma chácara a 35km do centro como "Viamão" e um lojista do centro vai ter que entregar? Quem paga essa corrida? Seu raio é por loja ou por cidade?
+- Cliente na divisa Viamão/Alvorada. O endereço cai em Alvorada mas o usuário seleciona Viamão. Você valida por CEP, por polígono geofence ou por bairro? Se for por CEP, Viamão tem CEPs compartilhados.
+- *Impacto Real:* Lojista aceita pedido impossível de entregar. Cancelamento + reembolso + 1 estrela.
+
+*B. Fluxo de Pedido:*
+`Criado → Confirmado → Em Preparo → Pronto → A Caminho → Entregue`
+Onde está `Aguardando Entregador`? O que acontece se ficar `Pronto para Envio` por 40 minutos e nenhum entregador aceita? Seu estado não tem timeout. Pedido apodrece.
+E se o entregador aceita, vai buscar, e a loja cancela? Não tem estado `Cancelado após aceite`. Quem paga o deslocamento?
+
+*C. Pagamento na Entrega + PIX:*
+Você listou 3 métodos como se fossem iguais. Não são.
+- PIX com Webhook: O que acontece se seu webhook cair? O cliente pagou, o banco confirmou, seu sistema não. Pedido fica como "Aguardando Pagamento" para sempre. Cadê sua estratégia de idempotência e reconciliação?
+- Dinheiro na entrega: Entregador volta sem receber. Quem assume prejuízo? Lojista? Plataforma?
+
+#### 2. DEPENDÊNCIAS OCULTAS E PICO DE FALHA
+
+Você tem 3 apps + 1 painel dependendo de um Monólito Modular.
+
+- *Ponto Único de Falha Total:* Se seu monólito cai na sexta 20h, cai Cliente, Lojista, Entregador e Admin juntos. Você falou em "alta resiliência em horários de pico" no RNF, mas não descreveu NENHUMA estratégia: sem circuit breaker, sem fila, sem read replica. É wishful thinking.
+- *Rastreamento em tempo real a cada 5-10s:* Cada entregador mandando GPS via WebSocket para o monólito. 50 entregadores simultâneos = 5 req/s só de localização. 500 entregadores = 50 req/s constantes. Seu "monólito barato" vai ter que segurar WebSocket stateful. Você testou o custo de dados móveis do entregador? Ele vai desligar seu app pra economizar bateria.
+- *Notificação Push:* Depende de FCM/APNS. Se falhar, seu fluxo de estados quebra silenciosamente. O lojista não vê o pedido. Cadê o fallback por SMS/WhatsApp? Cadê a caixa de entrada dentro do app?
+
+#### 3. AMBIGUIDADES E SUPOSIÇÕES MÁGICAS
+
+*Suposição 1: "Orientado a Eventos" sem Event Bus*
+Você escreveu "Monólito Modular orientado a Eventos". Onde está a definição do bus? É in-memory? É Postgres com Outbox Pattern? É RabbitMQ? Se for in-memory, se o processo reinicia no meio de um evento `PedidoConfirmado → NotificarEntregadores`, o evento some. Pedido nunca é entregue.
+
+*Suposição 2: Baixa Latência = "sem onerar consumo de dados"*
+Essas duas coisas são opostas. Baixa latência exige polling/WebSocket. Baixo consumo exige batch. Você não pode ter os dois sem definir um protocolo de compressão/delta.
+
+*Suposição 3: Escalabilidade "sem reescrita total"*
+Frase vazia. Modular como? Por schema? Por bounded context? Quais são os módulos? `Pedidos, Lojas, Entregadores, Pagamentos`? Como eles se comunicam? Se Pagamentos precisar escalar separado de Rastreamento, seu monólito não deixa.
+
+*Suposição 4: LGPD e Compliance*
+Você coleta endereço, geolocalização em tempo real do entregador, dados de pagamento. Onde está a seção de Privacidade, retenção, consentimento? Viamão Delivery sem isso toma processo.
+
+#### 4. O QUE FALTA E QUE REPROVA QUALQUER RFC
+
+Seu documento para na Seção 3. Faltou:
+- Modelo de dados e concorrência: 2 entregadores aceitam a mesma corrida ao mesmo tempo. Quem ganha?
+- Algoritmo de despacho: É por proximidade? Por fila? O entregador pode recusar infinitamente?
+- Gestão de catálogo: Lojista muda preço durante um pedido em carrinho. Qual preço vale?
+- Observabilidade: Como você sabe que está em pico?
+
+---
+
+### ⚖️ VEREDITO IMPIEDOSO: *REPROVADO*
+
+*Motivo:* Documento incompleto, com requisitos funcionais que ignoram a realidade geográfica de Viamão, sem definição de eventos, sem estratégia de falha para PIX/Webhook e Rastreamento, e com uma arquitetura declarada mas não desenhada.
+
+Você não tem um RFC. Você tem um pitch de vendas com diagrama faltando.
+
+*Para ser APROVADO COM RESSALVAS, você precisa entregar no mínimo:*
+1. Finalizar a frase do item 3 e definir: Barramento de eventos (Outbox + Postgres), DLQ, idempotência.
+2. Diagrama de estados completo com timeouts e compensações.
+3. Estratégia de geofence por loja com polígonos, não por cidade.
+4. Plano de reconciliação de PIX e fallback de notificações.
+
+Cole a versão 2 quando tiver isso. Eu estarei aqui, sem lembrar de você, pronto para destruir de novo.
+
+[Elephant - Arquiteto]:
+# 📜 RFC-002 (v2.0) — DOCUMENTO DE DESIGN DE ARQUITETURA
+**Projeto:** Plataforma Viamão Delivery
+**Status:** Em Revisão Arquitetural
+**Autor:** Arquiteto de Software Principal
+**Substitui:** RFC-002 (v1.0 - Draft Incompleto)
+
+---
+
+## 1. Visão Geral e Contexto
+
+Completando o trecho interrompido da v1:
+> *"A escolha por um Monólito Modular reduz custos de infraestrutura no início, **mas mantém os Bounded Contexts estritamente isolados em código e banco de dados (Schemas lógicos separados), permitindo a extração granular para microserviços independentes sem a necessidade de reescrita da regra de negócio quando a carga escalar.**"*
+
+A plataforma **Viamão Delivery** tem como meta atender à complexa realidade geográfica do município de Viamão/RS (extensa área urbana e vasta zona rural como Águas Claras e Itapuã), garantindo alta disponibilidade nos picos de consumo (sexta a domingo, 18h-23h), tolerância a falhas na rede de dados móveis de entregadores e consistência financeira em pagamentos via PIX e presenciais.
+
+---
+
+## 2. Arquitetura de Módulos e Event-Driven Architecture (EDA)
+
+O sistema é construído como um **Monólito Modular Event-Driven**, onde a comunicação assíncrona entre módulos é garantida com resiliência a falhas de processo através do **Transactional Outbox Pattern**.
+
+### 2.1. Isolation & Bounded Contexts
+
+```
+[ API Gateway / Nginx ]
+         │
+         ▼
+┌─────────────────────────────────────────────────────────┐
+│              MONÓLITO MODULAR (Spring Boot)             │
+│                                                         │
+│  ┌──────────────┐   ┌──────────────┐   ┌─────────────┐  │
+│  │ Context:     │   │ Context:     │   │ Context:    │  │
+│  │ Catalog      │   │ Order        │   │ Delivery    │  │
+│  └──────┬───────┘   └──────┬───────┘   └──────┬──────┘  │
+│         │                  │                  │         │
+│  ┌──────┴───────┐   ┌──────┴───────┐   ┌──────┴──────┐  │
+│  │ Context:     │   │ Context:     │   │ Context:    │  │
+│  │ Payment      │   │ Geofence     │   │ Notification│  │
+│  └──────────────┘   └──────────────┘   └─────────────┘  │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │ Transactional Outbox Engine (PostgreSQL Engine)   │  │
+│  └─────────────────────────┬─────────────────────────┘  │
+└────────────────────────────┼────────────────────────────┘
+                             │
+                             ▼
+              ┌─────────────────────────────┐
+              │ Message Broker (RabbitMQ)   │
+              └──────────────┬──────────────┘
+                             │
+            ┌────────────────┴────────────────┐
+            ▼                                 ▼
+┌───────────────────────┐         ┌───────────────────────┐
+│ Push Notification Worker│        │ Dispatch/Matching Engine│
+└───────────────────────┘         └───────────────────────┘
+```
+
+### 2.2. Event Bus & Transactional Outbox Pattern
+
+Para impedir a perda de eventos caso a aplicação reinicie no meio de um fluxo:
+1. Todas as mutações de domínio e a emissão do evento ocorrem na **mesma transação de banco de dados**.
+2. O evento é gravado na tabela `outbox_events`.
+3. Um worker leve leitor da tabela (usando *Change Data Capture* via Debezium ou polling otimizado com `FOR UPDATE SKIP LOCKED`) publica a mensagem no **RabbitMQ**.
+4. Mensagens não processadas após 3 tentativas vão para a **Dead Letter Queue (DLQ)** e disparam alertas de observabilidade.
+
+---
+
+## 3. Delimitação Geográfica e Geofencing
+
+Viamão possui uma área de 1.494 km². CEPs genéricos ou raio por cidade inteira são proibidos.
+
+### 3.1. Algoritmo de Validação por Polígonos (PostGIS)
+
+1. **Raio por Loja:** Cada estabelecimento define seu polígono de entrega exato via coordenadas (GeoJSON) armazenado no PostgreSQL com a extensão **PostGIS**.
+2. **Validação de Entrega:**
+   - O endereço de entrega do cliente é convertido em coordenadas (Latitude/Longitude) via serviço de Geocoding (com cache em Redis por CEP + Número).
+   - O banco executa a consulta espacial: `ST_Contains(loja.zona_entrega, ST_SetSRID(ST_Point(lon, lat), 4326))`.
+3. **Cálculo da Taxa de Entrega:**
+   - Calculado dinamicamente com base na distância de rota real (OpenStreetMap/OSRM) + tabela progressiva do lojista (KM Urbano vs. KM Rural/Estrada não pavimentada).
+
+---
+
+## 4. Máquina de Estados do Pedido (State Machine & Saga Pattern)
+
+A alteração de estado do pedido é rígida e prevê timeouts de inatividade e cancelamentos em qualquer etapa.
+
+```
+[CRIADO] ──► [AGUARDANDO_PAGAMENTO] ──► [PAGO / AGUARDANDO_ACEITE_LOJA]
+                                                  │
+                                                  ▼
+[CANCELADO] ◄─────────────────────────── [EM_PREPARO]
+    ▲                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [PRONTO_PARA_ENVIO]
+    │                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [AGUARDANDO_ENTREGADOR]
+    │                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [EM_TRANSITO]
+    │                                             │
+    │                                             ▼
+[CANCELADO_COM_COMPENSACAO] ◄──────────── [ENTREGUE]
+```
+
+### 4.1. Tabela de Transições, Timeouts e Compensações
+
+| Estado Origem | Evento / Gatilho | Estado Destino | Timeout | Ação em Caso de Timeout |
+| :--- | :--- | :--- | :--- | :--- |
+| `CRIADO` | Checkout finalizado | `AGUARDANDO_PAGAMENTO` | 15 min | Cancela pedido por expiração de PIX. |
+| `AGUARDANDO_PAGAMENTO` | Confirmado via Webhook/Reconciliação | `AGUARDANDO_ACEITE_LOJA` | — | — |
+| `AGUARDANDO_ACEITE_LOJA` | Loja clica em "Aceitar" | `EM_PREPARO` | 10 min | Cancela pedido e executa **Estorno Automático (PIX Return)**. |
+| `EM_PREPARO` | Loja finaliza produção | `PRONTO_PARA_ENVIO` | Config. por loja | Alerta no painel do admin/loja sobre atraso. |
+| `PRONTO_PARA_ENVIO` | Sistema busca entregador | `AGUARDANDO_ENTREGADOR` | 20 min | Executa algoritmo de expansão de raio de busca. Se falhar total: Cancela, estorna PIX e credita cupom de desculpas. |
+| `AGUARDANDO_ENTREGADOR` | Entregador dá "Aceite" no App | `EM_TRANSITO` | — | — |
+| `EM_TRANSITO` | Entregador valida PIN com cliente | `ENTREGUE` | 60 min | Transfere status para auditoria de entrega estendida. |
+| `EM_TRANSITO` / `AGUARDANDO_ENTREGADOR` | Loja cancela | `CANCELADO_APOS_ACEITE` | — | Paga taxa mínima de deslocamento ao entregador (*Compensação*). |
+
+---
+
+## 5. Estratégia de Pagamento, Reconciliação e Idempotência
+
+### 5.1. PIX com Falha de Webhook (Reconciliação)
+
+1. **Idempotência:** Cada transação gera um `idempotency_key` único (`UUIDv4`) enviado ao Gateway de Pagamento. Requisições duplicadas retornam a mesma resposta sem reprocessamento.
+2. **Worker de Reconciliação (Polling Fallback):**
+   - Um job assíncrono executa a cada 2 minutos buscando pedidos em `AGUARDANDO_PAGAMENTO` criados há mais de 3 minutos.
+   - O worker faz polling direto na API REST do Gateway para checar se a chave PIX (TxID) foi liquidada.
+   - Se paga: dispara o evento `PedidoPagoEvent` e segue a máquina de estados normalmente.
+
+### 5.2. Pagamento Presencial (Dinheiro/Maquininha)
+
+- Pedidos marcados com "Dinheiro" geram um compromisso de cobrança no aplicativo do entregador.
+- **Risco de Fraude/Não Pagamento:** A plataforma mantém um limite de retenção de saldo para o entregador. Se o entregador reportar que o cliente não pagou, o pedido entra em conteste administrativo e o lojista recebe a garantia da plataforma após análise do log de geolocalização do entregador no local.
+
+---
+
+## 6. Concorrência, Despacho e Otimização de Telemetria (GPS)
+
+### 6.1. Prevenção de Aceite Duplo (Race Conditions no Despacho)
+
+Para evitar que 2 entregadores aceitem a mesma corrida simultaneamente:
+- A atribuição utiliza **Lock Impeditivo/Pessimista** a nível de banco de dados na reserva da corrida:
+  ```sql
+  SELECT * FROM entregas WHERE id = :entregaId AND status = 'DISPONIVEL' FOR UPDATE;
+  ```
+- O primeiro entregador a transacionar altera o status para `RESERVADO_ENTREGADOR_{ID}`. O segundo recebe imediatamente `HTTP 409 Conflict` e o app atualiza a lista de ofertas.
+
+### 6.2. Otimização de Rastreamento GPS via WebSocket / Protocolo Delta
+
+Para mitigar alto consumo de bateria/dados móveis dos entregadores e manter o backend escalável:
+1. **Filtro de Deslocamento (Client-Side):** O app do entregador só envia coordenadas via WebSocket se:
+   - Houver deslocamento mínimo de 25 metros **OU**
+   - Transcorrerem 15 segundos desde a última atualização.
+2. **Geohash & Protocolo Delta:** O payload transporta apenas a diferença (delta) da posição geográfica compactada:
+   ```json
+   {
+     "t": 1711900000,
+     "lat": -30.0811,
+     "lon": -51.0233,
+     "s": 35.5
+   }
+   ```
+3. **Desconex
+
+[Goldfish - Revisor Crítico]:
+🐟 **Goldfish na área.** Sem memória, sem carinho e focado no abate.
+
+Você trouxe a versão 2.0. Corrigiu algumas coisas no papel, mas colocou **minas terrestres gigantescas** na lógica de negócios e no fluxo de pagamentos. E para piorar: **VOCÊ CORTOU O DOCUMENTO DE NOVO NO FINAL DA SEÇÃO 6.3** (`3. Desconex...`). 
+
+Abaixo está a dissecação impiedosa do seu RFC-002 (v2.0).
+
+---
+
+### 🔴 ANÁLISE DESTRUTIVA: RFC-002 (v2.0)
+
+#### 1. RACE CONDITION CRÍTICA: PIX vs. TIMEOUT DE CANCELAMENTO
+
+Seu fluxo de pagamento PIX tem uma falha de sincronismo grave que vai gerar **perda de dinheiro e clientes furiosos**:
+
+*   **A Armadilha:**
+    *   Timeout de `AGUARDANDO_PAGAMENTO`: **15 minutos**.
+    *   Worker de Reconciliação: Roda a cada **2 minutos** checando pedidos criados há mais de 3 minutos.
+    *   **Cenário Real:** O cliente faz o PIX aos **14 minutos e 30 segundos**. O Webhook da adquirente falha ou atrasa (comum em picos).
+    *   Aos **15 minutos e 00 segundos**, a máquina de estados cancela o pedido por timeout (`CRIADO → CANCELADO`).
+    *   Aos **16 minutos e 00 segundos**, o Worker de Reconciliação roda, consulta a API do banco e descobre: *"O PIX de R$ 100 foi pago às 14:30!"*.
+*   **O Desastre:** O banco do cliente debitou o dinheiro, o reconciliador vê que foi pago, mas o pedido **já está CANCELADO** no sistema. O cliente fica sem a comida e sem o dinheiro automático, pois seu worker não sabe o que fazer com um pagamento confirmado para um pedido já cancelado por timeout!
+*   **O que faltou:** Lock de estado transitório (`PROCESSANDO_RECONCILIACAO`) antes de aplicar cancelamento por timeout, ou janela de carência (*grace period*) obrigatória.
+
+---
+
+#### 2. PREJUÍZO NÃO MITIGADO DO LOJISTA (FOOD WASTE)
+
+Na Seção 4.1 (Tabela de Estados):
+*   Se o pedido fica em `PRONTO_PARA_ENVIO` e expira o timeout de 20 minutos em `AGUARDANDO_ENTREGADOR`:
+    *   Sua ação: *"Cancela, estorna PIX e credita cupom de desculpas"*.
+*   **A Falha de Negócio:** A comida **já foi produzida** (estava pronta na bancada da loja). O restaurante gastou insumos, mão de obra e embalagem. O sistema simplesmente cancela e devolve o dinheiro ao cliente. **Quem paga a conta do lojista?**
+*   Sem um mecanismo de **compensação financeira ao estabelecimento** para cancelamentos por falta de entregador da plataforma, os lojistas de Viamão vão abandonar seu app na primeira semana.
+
+---
+
+#### 3. GARGALO MONUMENTAL DE DESEMPENHO NO DESPACHO
+
+Na Seção 6.1, você propôs prevenção de race condition assim:
+```sql
+SELECT * FROM entregas WHERE id = :entregaId AND status = 'DISPONIVEL' FOR UPDATE;
+```
+*   **Por que isso quebra sob carga:**
+    *   Lock pessimista (`FOR UPDATE`) direto na tabela principal do PostgreSQL em horário de pico (Sexta 20h) cria **contenção de conexões no Pool (HikariCP/PgBouncer)**.
+    *   Se 50 entregadores em trânsito abrem o app e a API tenta dar `FOR UPDATE` simultâneo para disputar corridas, você vai estourar o limite de conexões do banco de dados, gerando `ConnectionTimeoutException` e travando a API do Monólito inteira.
+    *   *Solução correta ignorada:* Chaves de bloqueio distribuído temporárias via **Redis (Redlock/Lua Scripting)** ou controle otimista com versionamento de entidade (`@Version`), deixando o Postgres fora da briga por latência de milissegundos.
+
+---
+
+#### 4. CEGUEIRA GEOGRÁFICA (VIAMÃO RURAL E FALHA DE GEOCODING)
+
+Na Seção 3.1:
+*   Você assumiu que o endereço do cliente será convertido em Latitude/Longitude via serviço de Geocoding (com cache em Redis por CEP).
+*   **A Ilusão:** Em bairros como Águas Claras, Itapuã, ou áreas de chácaras de Viamão, **não existe CEP por rua** (é CEP único para a região inteira) e as APIs de Geocoding (Google/OSM) falham miseravelmente ou devolvem a coordenada do centro do distrito (a quilômetros do local real).
+*   Se a API de Geocoding retornar uma coordenada aproximada/errada no meio do mato, seu `ST_Contains` do PostGIS vai dizer que a loja não entrega lá, bloqueando a venda, ou vai calcular uma taxa de entrega irreal baseada no centro do bairro.
+*   *O que faltou:* Fallback para o cliente **marcar o pino manualmente no mapa** no momento do cadastro e validação de precisão da coordenada (*location type/accuracy score*).
+
+---
+
+#### 5. ILUSÃO DA "ARQUITETURA SIMPLES" E SPOF
+
+Você vendeu a ideia de um "Monólito Modular", mas desenhou uma infraestrutura distribuída hiper complexa:
+*   Tem **Spring Boot + PostgreSQL (Schemas separados) + PostGIS + Redis + RabbitMQ + Debezium (CDC) + Workers separados (Push e Dispatch)**.
+*   Isso **NÃO É** mais um monólito simples de manter. É um ecossistema distribuído com o pior dos dois mundos:
+    1. A complexidade operacional de manter brokers, CDC e pipelines de eventos.
+    2. O **Ponto Único de Falha (SPOF)** de manter todas as regras e o banco de dados centralizados. Se o PostgreSQL cair, o consumo de catálogo, pagamentos, despacho e rastreamento caem juntas instantaneamente.
+
+---
+
+#### 6. VULNERABILIDADE DE TELEMETRIA E DOCUMENTO INCOMPLETO
+
+*   **Confiança Cega no Cliente (App do Entregador):**
+    *   Sua otimização de GPS confia 100% nas regras do Client-Side (enviar a cada 25m ou 15s). Qualquer entregador usando um app modificado (*Mock Location* / Fake GPS) pode fraudar a posição, simular que está na loja para pegar corrida ou fraudar o cálculo de deslocamento. Não há validação de sanidade (ex: detecção de teletransporte ou velocidade incompatível) no backend.
+*   **Documento Truncado:**
+    *   A Seção 6.3 para no meio da palavra: `3. Desconex...`. O que era? *Desconexão do WebSocket? Desincronização de relógio?* Não sei, você não terminou.
+
+---
+
+### ⚖️ VEREDITO IMPIEDOSO: *REPROVADO*
+
+**Motivo:** 
+1. **Documento incompleto** (cortado novamente no final).
+2. **Race condition grave** no fluxo de PIX que resulta em cobrança indevida sem geração de pedido.
+3. **Lock pessimista no Postgres** que vai derrubar o banco de dados nos horários de pico descritos no próprio RNF.
+4. **Ausência de modelo de proteção financeira ao lojista** em caso de estouro de tempo de busca por entregador.
+5. **Cegueira quanto às limitações de Geocoding** em zonas rurais/CEPs genéricos de Viamão.
+
+---
+
+#### 📋 O que você DEVE corrigir para a v3.0:
+1. **Terminar o texto.**
+2. **Fix do PIX:** Introduzir estado de transição/carência ou travar o cancelamento por timeout enquanto houver consulta de reconciliação em andamento.
+3. **Fix de Concorrência:** Substituir `FOR UPDATE` no banco por Redis / Lock Distribuído Atômico para aceites de entrega.
+4. **Fix da Zona Rural:** Definir obrigatoriedade de seleção de localização exata via mapa (Pin Drop) com validação de precisão (*accuracy score*) quando o CEP for genérico.
+5. **Compensação de Lojista:** Adicionar a regra de reembolso/compensação ao lojista caso o pedido seja cancelado após o estado `PRONTO_PARA_ENVIO`.
+
+[Você]:
+2.2. Event Bus & Transactional Outbox Pattern
+
+Para impedir a perda de eventos caso a aplicação reinicie no meio de um fluxo:
+1. Todas as mutações de domínio e a emissão do evento ocorrem na **mesma transação de banco de dados**.
+2. O evento é gravado na tabela `outbox_events`.
+3. Um worker leve leitor da tabela (usando *Change Data Capture* via Debezium ou polling otimizado com `FOR UPDATE SKIP LOCKED`) publica a mensagem no **RabbitMQ**.
+4. Mensagens não processadas após 3 tentativas vão para a **Dead Letter Queue (DLQ)** e disparam alertas de observabilidade.
+
+---
+
+## 3. Delimitação Geográfica e Geofencing
+
+Viamão possui uma área de 1.494 km². CEPs genéricos ou raio por cidade inteira são proibidos.
+
+### 3.1. Algoritmo de Validação por Polígonos (PostGIS)
+
+1. **Raio por Loja:** Cada estabelecimento define seu polígono de entrega exato via coordenadas (GeoJSON) armazenado no PostgreSQL com a extensão **PostGIS**.
+2. **Validação de Entrega:**
+   - O endereço de entrega do cliente é convertido em coordenadas (Latitude/Longitude) via serviço de Geocoding (com cache em Redis por CEP + Número).
+   - O banco executa a consulta espacial: `ST_Contains(loja.zona_entrega, ST_SetSRID(ST_Point(lon, lat), 4326))`.
+3. **Cálculo da Taxa de Entrega:**
+   - Calculado dinamicamente com base na distância de rota real (OpenStreetMap/OSRM) + tabela progressiva do lojista (KM Urbano vs. KM Rural/Estrada não pavimentada).
+
+---
+
+## 4. Máquina de Estados do Pedido (State Machine & Saga Pattern)
+
+A alteração de estado do pedido é rígida e prevê timeouts de inatividade e cancelamentos em qualquer etapa.
+
+```
+[CRIADO] ──► [AGUARDANDO_PAGAMENTO] ──► [PAGO / AGUARDANDO_ACEITE_LOJA]
+                                                  │
+                                                  ▼
+[CANCELADO] ◄─────────────────────────── [EM_PREPARO]
+    ▲                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [PRONTO_PARA_ENVIO]
+    │                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [AGUARDANDO_ENTREGADOR]
+    │                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [EM_TRANSITO]
+    │                                             │
+    │                                             ▼
+[CANCELADO_COM_COMPENSACAO] ◄──────────── [ENTREGUE]
+```
+
+### 4.1. Tabela de Transições, Timeouts e Compensações
+
+| Estado Origem | Evento / Gatilho | Estado Destino | Timeout | Ação em Caso de Timeout |
+| :--- | :--- | :--- | :--- | :--- |
+| `CRIADO` | Checkout finalizado | `AGUARDANDO_PAGAMENTO` | 15 min | Cancela pedido por expiração de PIX. |
+| `AGUARDANDO_PAGAMENTO` | Confirmado via Webhook/Reconciliação | `AGUARDANDO_ACEITE_LOJA` | — | — |
+| `AGUARDANDO_ACEITE_LOJA` | Loja clica em "Aceitar" | `EM_PREPARO` | 10 min | Cancela pedido e executa **Estorno Automático (PIX Return)**. |
+| `EM_PREPARO` | Loja finaliza produção | `PRONTO_PARA_ENVIO` | Config. por loja | Alerta no painel do admin/loja sobre atraso. |
+| `PRONTO_PARA_ENVIO` | Sistema busca entregador | `AGUARDANDO_ENTREGADOR` | 20 min | Executa algoritmo de expansão de raio de busca. Se falhar total: Cancela, estorna PIX e credita cupom de desculpas. |
+| `AGUARDANDO_ENTREGADOR` | Entregador dá "Aceite" no App | `EM_TRANSITO` | — | — |
+| `EM_TRANSITO` | Entregador valida PIN com cliente | `ENTREGUE` | 60 min | Transfere status para auditoria de entrega estendida. |
+| `EM_TRANSITO` / `AGUARDANDO_ENTREGADOR` | Loja cancela | `CANCELADO_APOS_ACEITE` | — | Paga taxa mínima de deslocamento ao entregador (*Compensação*). |
+
+---
+
+## 5. Estratégia de Pagamento, Reconciliação e Idempotência
+
+### 5.1. PIX com Falha de Webhook (Reconciliação)
+
+1. **Idempotência:** Cada transação gera um `idempotency_key` único (`UUIDv4`) enviado ao Gateway de Pagamento. Requisições duplicadas retornam a mesma resposta sem reprocessamento.
+2. **Worker de Reconciliação (Polling Fallback):**
+   - Um job assíncrono executa a cada 2 minutos buscando pedidos em `AGUARDANDO_PAGAMENTO` criados há mais de 3 minutos.
+   - O worker faz polling direto na API REST do Gateway para checar se a chave PIX (TxID) foi liquidada.
+   - Se paga: dispara o evento `PedidoPagoEvent` e segue a máquina de estados normalmente.
+
+### 5.2. Pagamento Presencial (Dinheiro/Maquininha)
+
+- Pedidos marcados com "Dinheiro" geram um compromisso de cobrança no aplicativo do entregador.
+- **Risco de Fraude/Não Pagamento:** A plataforma mantém um limite de retenção de saldo para o entregador. Se o entregador reportar que o cliente não pagou, o pedido entra em conteste administrativo e o lojista recebe a garantia da plataforma após análise do log de geolocalização do entregador no local.
+
+---
+
+## 6. Concorrência, Despacho e Otimização de Telemetria (GPS)
+
+### 6.1. Prevenção de Aceite Duplo (Race Conditions no Despacho)
+
+Para evitar que 2 entregadores aceitem a mesma corrida simultaneamente:
+- A atribuição utiliza **Lock Impeditivo/Pessimista** a nível de banco de dados na reserva da corrida:
+  ```sql
+  SELECT * FROM entregas WHERE id = :entregaId AND status = 'DISPONIVEL' FOR UPDATE;
+  ```
+- O primeiro entregador a transacionar altera o status para `RESERVADO_ENTREGADOR_{ID}`. O segundo recebe imediatamente `HTTP 409 Conflict` e o app atualiza a lista de ofertas.
+
+### 6.2. Otimização de Rastreamento GPS via WebSocket / Protocolo Delta
+
+Para mitigar alto consumo de bateria/dados móveis dos entregadores e manter o backend escalável:
+1. **Filtro de Deslocamento (Client-Side):** O app do entregador só envia coordenadas via WebSocket se:
+   - Houver deslocamento mínimo de 25 metros **OU**
+   - Transcorrerem 15 segundos desde a última atualização.
+2. **Geohash & Protocolo Delta:** O payload transporta apenas a diferença (delta) da posição geográfica compactada:
+   ```json
+   {
+     "t": 1711900000,
+     "lat": -30.0811,
+     "lon": -51.0233,
+     "s": 35.5
+   }
+   ```
+3. **Desconexão / Fallback:** Caso o WebSocket caia, as posições são acumuladas em SQLite local no app do entregador e enviadas em batch compactado (gzip) via HTTP POST assim que a rede restabelecer.
+
+---
+
+## 7. Gestão de Catálogo e Imutabilidade do Carrinho
+
+- **Preço Congelado no Checkout:** Quando o cliente inicia o checkout, é gerado um `Snapshot do Pedido`. Se o lojista alterar o valor do item no catálogo durante o processo, o valor contratado no snapshot é o mantido e respeitado.
+- **Itens Fora de Estoque:** Módulo de Catálogo utiliza **Redis Cache (Invalidação Baseada em Eventos)**. Se um produto for desativado pelo lojista, um evento `ProdutoIndisponivelEvent` purga o cache instantaneamente e impede novos Checkouts para aquele item.
+
+---
+
+## 8. Conformidade LGPD e Retenção de Dados
+
+1. **Anonimização de Telemetria:** Históricos de posições de GPS de entregadores são purgados do banco principal após 30 dias e transferidos para Data Lake em formato agregado/anonimizado para treinamento de modelos de roteamento.
+2. **Dados Sensíveis do Cliente:** Endereços e telefones são mascarados no painel do entregador após a conclusão da entrega (`Status: ENTREGUE`).
+3. **Direito ao Esquecimento:** Rota para exclusão de conta via app com retenção apenas de dados fiscais/financeiros obrigatórios por lei (Lei do Marco Civil da Internet e Código Tributário Nacional).
+
+---
+
+## 9. Plano de Observabilidade e Resiliência
+
+1. **Circuit Breakers (Resilience4j):** Aplicados a integrações externas (Gateways de Pagamento, FCM/APNS, APIs de mapas). Se o gateway falhar > 50% das requisições em 30s, o circuito abre e redireciona pagamentos para o provedor secundário (Fallback Gateway).
+2. **Métricas de Pico:** Monitoramento em tempo real via Prometheus + Grafana rastreando:
+   - Taxa de requisições por segundo (RPS) no WebSocket de telemetria.
+   - Lag de processamento da tabela `outbox_events`.
+   - Taxa de pedidos com timeout de aceite.
+
+---
+
+## 10. Status da Revisão
+
+- [x] Barramento de Eventos e Outbox Pattern definidos.
+- [x] Máquina de estados completa com timeouts e compensações financeiras.
+- [x] Validação Geográfica com PostGIS por loja (Urbano e Rural).
+- [x] Estratégia de concorrência e idempotência de pagamentos validada.
+
+**Documento aprovado para início da especificação técnica e implementação.**
+
+~/downloads $
+
+[Goldfish - Revisor Crítico]:
+⚠️ Não foi possível obter resposta: Gemini API Error: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.
+
+[Você]:
+2.2. Event Bus & Transactional Outbox Pattern
+
+Para impedir a perda de eventos caso a aplicação reinicie no meio de um fluxo:
+1. Todas as mutações de domínio e a emissão do evento ocorrem na **mesma transação de banco de dados**.
+2. O evento é gravado na tabela `outbox_events`.
+3. Um worker leve leitor da tabela (usando *Change Data Capture* via Debezium ou polling otimizado com `FOR UPDATE SKIP LOCKED`) publica a mensagem no **RabbitMQ**.
+4. Mensagens não processadas após 3 tentativas vão para a **Dead Letter Queue (DLQ)** e disparam alertas de observabilidade.
+
+---
+
+## 3. Delimitação Geográfica e Geofencing
+
+Viamão possui uma área de 1.494 km². CEPs genéricos ou raio por cidade inteira são proibidos.
+
+### 3.1. Algoritmo de Validação por Polígonos (PostGIS)
+
+1. **Raio por Loja:** Cada estabelecimento define seu polígono de entrega exato via coordenadas (GeoJSON) armazenado no PostgreSQL com a extensão **PostGIS**.
+2. **Validação de Entrega:**
+   - O endereço de entrega do cliente é convertido em coordenadas (Latitude/Longitude) via serviço de Geocoding (com cache em Redis por CEP + Número).
+   - O banco executa a consulta espacial: `ST_Contains(loja.zona_entrega, ST_SetSRID(ST_Point(lon, lat), 4326))`.
+3. **Cálculo da Taxa de Entrega:**
+   - Calculado dinamicamente com base na distância de rota real (OpenStreetMap/OSRM) + tabela progressiva do lojista (KM Urbano vs. KM Rural/Estrada não pavimentada).
+
+---
+
+## 4. Máquina de Estados do Pedido (State Machine & Saga Pattern)
+
+A alteração de estado do pedido é rígida e prevê timeouts de inatividade e cancelamentos em qualquer etapa.
+
+```
+[CRIADO] ──► [AGUARDANDO_PAGAMENTO] ──► [PAGO / AGUARDANDO_ACEITE_LOJA]
+                                                  │
+                                                  ▼
+[CANCELADO] ◄─────────────────────────── [EM_PREPARO]
+    ▲                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [PRONTO_PARA_ENVIO]
+    │                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [AGUARDANDO_ENTREGADOR]
+    │                                             │
+    │                                             ▼
+    ├──────────────────────────────────── [EM_TRANSITO]
+    │                                             │
+    │                                             ▼
+[CANCELADO_COM_COMPENSACAO] ◄──────────── [ENTREGUE]
+```
+
+### 4.1. Tabela de Transições, Timeouts e Compensações
+
+| Estado Origem | Evento / Gatilho | Estado Destino | Timeout | Ação em Caso de Timeout |
+| :--- | :--- | :--- | :--- | :--- |
+| `CRIADO` | Checkout finalizado | `AGUARDANDO_PAGAMENTO` | 15 min | Cancela pedido por expiração de PIX. |
+| `AGUARDANDO_PAGAMENTO` | Confirmado via Webhook/Reconciliação | `AGUARDANDO_ACEITE_LOJA` | — | — |
+| `AGUARDANDO_ACEITE_LOJA` | Loja clica em "Aceitar" | `EM_PREPARO` | 10 min | Cancela pedido e executa **Estorno Automático (PIX Return)**. |
+| `EM_PREPARO` | Loja finaliza produção | `PRONTO_PARA_ENVIO` | Config. por loja | Alerta no painel do admin/loja sobre atraso. |
+| `PRONTO_PARA_ENVIO` | Sistema busca entregador | `AGUARDANDO_ENTREGADOR` | 20 min | Executa algoritmo de expansão de raio de busca. Se falhar total: Cancela, estorna PIX e credita cupom de desculpas. |
+| `AGUARDANDO_ENTREGADOR` | Entregador dá "Aceite" no App | `EM_TRANSITO` | — | — |
+| `EM_TRANSITO` | Entregador valida PIN com cliente | `ENTREGUE` | 60 min | Transfere status para auditoria de entrega estendida. |
+| `EM_TRANSITO` / `AGUARDANDO_ENTREGADOR` | Loja cancela | `CANCELADO_APOS_ACEITE` | — | Paga taxa mínima de deslocamento ao entregador (*Compensação*). |
+
+---
+
+## 5. Estratégia de Pagamento, Reconciliação e Idempotência
+
+### 5.1. PIX com Falha de Webhook (Reconciliação)
+
+1. **Idempotência:** Cada transação gera um `idempotency_key` único (`UUIDv4`) enviado ao Gateway de Pagamento. Requisições duplicadas retornam a mesma resposta sem reprocessamento.
+2. **Worker de Reconciliação (Polling Fallback):**
+   - Um job assíncrono executa a cada 2 minutos buscando pedidos em `AGUARDANDO_PAGAMENTO` criados há mais de 3 minutos.
+   - O worker faz polling direto na API REST do Gateway para checar se a chave PIX (TxID) foi liquidada.
+   - Se paga: dispara o evento `PedidoPagoEvent` e segue a máquina de estados normalmente.
+
+### 5.2. Pagamento Presencial (Dinheiro/Maquininha)
+
+- Pedidos marcados com "Dinheiro" geram um compromisso de cobrança no aplicativo do entregador.
+- **Risco de Fraude/Não Pagamento:** A plataforma mantém um limite de retenção de saldo para o entregador. Se o entregador reportar que o cliente não pagou, o pedido entra em conteste administrativo e o lojista recebe a garantia da plataforma após análise do log de geolocalização do entregador no local.
+
+---
+
+## 6. Concorrência, Despacho e Otimização de Telemetria (GPS)
+
+### 6.1. Prevenção de Aceite Duplo (Race Conditions no Despacho)
+
+Para evitar que 2 entregadores aceitem a mesma corrida simultaneamente:
+- A atribuição utiliza **Lock Impeditivo/Pessimista** a nível de banco de dados na reserva da corrida:
+  ```sql
+  SELECT * FROM entregas WHERE id = :entregaId AND status = 'DISPONIVEL' FOR UPDATE;
+  ```
+- O primeiro entregador a transacionar altera o status para `RESERVADO_ENTREGADOR_{ID}`. O segundo recebe imediatamente `HTTP 409 Conflict` e o app atualiza a lista de ofertas.
+
+### 6.2. Otimização de Rastreamento GPS via WebSocket / Protocolo Delta
+
+Para mitigar alto consumo de bateria/dados móveis dos entregadores e manter o backend escalável:
+1. **Filtro de Deslocamento (Client-Side):** O app do entregador só envia coordenadas via WebSocket se:
+   - Houver deslocamento mínimo de 25 metros **OU**
+   - Transcorrerem 15 segundos desde a última atualização.
+2. **Geohash & Protocolo Delta:** O payload transporta apenas a diferença (delta) da posição geográfica compactada:
+   ```json
+   {
+     "t": 1711900000,
+     "lat": -30.0811,
+     "lon": -51.0233,
+     "s": 35.5
+   }
+   ```
+3. **Desconexão / Fallback:** Caso o WebSocket caia, as posições são acumuladas em SQLite local no app do entregador e enviadas em batch compactado (gzip) via HTTP POST assim que a rede restabelecer.
+
+---
+
+## 7. Gestão de Catálogo e Imutabilidade do Carrinho
+
+- **Preço Congelado no Checkout:** Quando o cliente inicia o checkout, é gerado um `Snapshot do Pedido`. Se o lojista alterar o valor do item no catálogo durante o processo, o valor contratado no snapshot é o mantido e respeitado.
+- **Itens Fora de Estoque:** Módulo de Catálogo utiliza **Redis Cache (Invalidação Baseada em Eventos)**. Se um produto for desativado pelo lojista, um evento `ProdutoIndisponivelEvent` purga o cache instantaneamente e impede novos Checkouts para aquele item.
+
+---
+
+## 8. Conformidade LGPD e Retenção de Dados
+
+1. **Anonimização de Telemetria:** Históricos de posições de GPS de entregadores são purgados do banco principal após 30 dias e transferidos para Data Lake em formato agregado/anonimizado para treinamento de modelos de roteamento.
+2. **Dados Sensíveis do Cliente:** Endereços e telefones são mascarados no painel do entregador após a conclusão da entrega (`Status: ENTREGUE`).
+3. **Direito ao Esquecimento:** Rota para exclusão de conta via app com retenção apenas de dados fiscais/financeiros obrigatórios por lei (Lei do Marco Civil da Internet e Código Tributário Nacional).
+
+---
+
+## 9. Plano de Observabilidade e Resiliência
+
+1. **Circuit Breakers (Resilience4j):** Aplicados a integrações externas (Gateways de Pagamento, FCM/APNS, APIs de mapas). Se o gateway falhar > 50% das requisições em 30s, o circuito abre e redireciona pagamentos para o provedor secundário (Fallback Gateway).
+2. **Métricas de Pico:** Monitoramento em tempo real via Prometheus + Grafana rastreando:
+   - Taxa de requisições por segundo (RPS) no WebSocket de telemetria.
+   - Lag de processamento da tabela `outbox_events`.
+   - Taxa de pedidos com timeout de aceite.
+
+---
+
+## 10. Status da Revisão
+
+- [x] Barramento de Eventos e Outbox Pattern definidos.
+- [x] Máquina de estados completa com timeouts e compensações financeiras.
+- [x] Validação Geográfica com PostGIS por loja (Urbano e Rural).
+- [x] Estratégia de concorrência e idempotência de pagamentos validada.
+
+**Documento aprovado para início da especificação técnica e implementação.**
+
+~/downloads $
+
+[Goldfish - Revisor Crítico]:
+🐟 **Goldfish na área.** Sem memória de conversas passadas. O documento colado é a única verdade, e ele está cheio de **minas terrestres financeiras e gargalos operacionais**.
+
+Analisei a versão completa do **RFC-002: Viamão Delivery**. A seguir está a dissecação técnica do seu design.
+
+---
+
+### 🔴 ANÁLISE DESTRUTIVA DO DESIGN
+
+#### 1. Risco Financeiro: Race Condition entre PIX Timeout e Reconciliação (Seções 4.1 e 5.1)
+
+*   **A Falha Lógica:**
+    *   O timeout do estado `AGUARDANDO_PAGAMENTO` é de **15 minutos**.
+    *   O Worker de Reconciliação roda a cada **2 minutos** e busca pedidos criados há mais de 3 minutos.
+    *   **Cenário de Borda:** O cliente paga o PIX exatamente aos **14m45s**. O webhook da adquirente atrasa por instabilidade. Aos **15m00s**, a máquina de estados cancela o pedido por timeout (`CRIADO → CANCELADO`). Aos **16m00s**, o worker de reconciliação consulta a API do banco e descobre que o pagamento de R$ 150 foi confirmado.
+*   **O Impacto:** O worker dispara `PedidoPagoEvent` para um pedido que **já está com status `CANCELADO`**. Como sua máquina de estados lida com isso? Se o pedido transicionar de `CANCELADO` para `PAGO`, você envia um pedido cancelado para a cozinha. Se o evento for descartado, **o dinheiro do cliente foi debitado do banco e o sistema não entregou a comida nem estornou o valor automaticamente**.
+
+---
+
+#### 2. Gargalo de Desempenho e Exaustão de Conexões no DB (Seção 6.1)
+
+*   **A Falha de Arquitetura:**
+    *   Para evitar aceite duplo de corridas, você definiu:
+        `SELECT * FROM entregas WHERE id = :entregaId AND status = 'DISPONIVEL' FOR UPDATE;`
+*   **Por que isso derruba a aplicação em horário de pico:**
+    *   Sexta-feira, 20h. Dezenas ou centenas de entregadores recebem a notificação de um pedido de alta taxa. Todos clicam em "Aceitar" na mesma fração de segundo.
+    *   O uso de Lock Pessimista (`FOR UPDATE`) diretamente na tabela do PostgreSQL faz com que dezenas de threads do backend fiquem bloqueadas aguardando a transação da primeira thread fechar.
+*   **O Impacto:** Exaustão do Pool de Conexões do banco de dados (ex: HikariCP / PgBouncer). A API inteira (incluindo vitrine de lojas para clientes e painel de pedidos dos lojistas) para de responder devido a `ConnectionTimeoutException`. O Postgres **não deve ser usado como gerenciador de trava de concorrência em tempo real para disputas de alta frequência**.
+
+---
+
+#### 3. Prejuízo Financeiro Irrecuperável do Lojista (Seção 4.1)
+
+*   **A Falha de Negócio:**
+    *   Se um pedido atinge `PRONTO_PARA_ENVIO` e expira o timeout de 20 minutos em `AGUARDANDO_ENTREGADOR`, a ação definida é: *"Cancela, estorna PIX e credita cupom de desculpas"*.
+*   **O Impacto:** A comida **já foi preparada** (estava pronta na bancada da loja). O lojista gastou insumos, gás, embalagem e mão de obra. O sistema simplesmente cancela e devolve o dinheiro ao cliente. **Quem ressarcirá o estabelecimento pelo insumo perdido se a culpa da falta de entregadores é da plataforma?** Sem uma regra de compensação financeira ao lojista para cancelamentos na fase de expedição por falha de logística, os restaurantes abandonarão a plataforma.
+
+---
+
+#### 4. Cegueira Geográfica em Zonas Rurais e CEP Genérico (Seção 3.1)
+
+*   **A Falha de Premissa:**
+    *   Você assume que o endereço será convertido em Lat/Long via Geocoding com cache por `CEP + Número`.
+*   **O Impacto:** Em Viamão (ex: Águas Claras, Itapuã, zona rural), ruas inteiras compartilham um **CEP genérico único da região**, sem numeração oficial mapeada em bases do Google Maps ou OpenStreetMap.
+    *   O Geocoding retornará as coordenadas do centro do bairro (a quilômetros de distância do local real) ou falhará.
+    *   O cálculo espacial `ST_Contains` vai aprovar pedidos em locais inacessíveis ou negar entregas para clientes legítimos.
+*   **Falta no Design:** Mecanismo obrigatório de seleção manual de localização no mapa (Pin Drop) com validação do nível de precisão (`accuracy score`) retornado pela API de mapas antes da consulta espacial no PostGIS.
+
+---
+
+#### 5. Brecha de Fraude no Pagamento Presencial (Seção 5.2)
+
+*   **A Falha de Lógica de Auditoria:**
+    *   Você declarou que, se o entregador reportar que o cliente não pagou no dinheiro, a garantia ao lojista é liberada após *"análise do log de geolocalização do entregador no local"*.
+*   **O Impacto:** A presença física do entregador no local **prova apenas que ele esteve no endereço, não que ele não recebeu o dinheiro**. Um entregador mal intencionado pode pegar o dinheiro em espécie do cliente, clicar no app que "o cliente se recusou a pagar" e ir embora. A auditoria checará o GPS, verá que ele esteve lá e cobrirá o prejuízo. Você criou uma brecha explícita para desvio de caixa operado por entregadores.
+
+---
+
+#### 6. Inconsistência de Reconciliação no Multi-Gateway (Seção 9.1)
+
+*   **A Falha no Circuit Breaker:**
+    *   Se o Gateway A falhar (>50% de erro em 30s) e o Circuit Breaker redirecionar as chamadas para o Gateway B (Fallback), como fica o Worker de Reconciliação de PIX (Seção 5.1)?
+*   **O Impacto:** O worker de polling precisa saber para qual gateway a cobrança foi enviada. Se a chave `TxID` foi gerada no Gateway A antes do circuito abrir, mas o worker tentar consultar no Gateway B, o pagamento nunca será encontrado e o pedido será cancelado incorretamente.
+
+---
+
+### ⚖️ VEREDITO IMPIEDOSO: **REPROVADO**
+
+*Motivos:* O design v2.0 apresenta **falha grave de concorrência no banco de dados** que causará queda do sistema em horários de pico (`FOR UPDATE` na entrega), **vulnerabilidade de reconciliação financeira** que pode lesar o cliente no PIX, **ausência de compensação de insumos ao lojista** em falha de logística da plataforma e **vulnerabilidade a fraude financeira** no pagamento em dinheiro.
+
+---
+
+#### 📋 Condições OBRIGATÓRIAS para aprovação da v3.0:
+
+1. **Fix da Trava de Concorrência:** Remover `FOR UPDATE` do PostgreSQL no despacho de entregas. Utilizar travas distribuídas atômicas no Redis (ex: Redlock ou Scripts Lua) para garantia de aceite único sem sobrecarregar o banco relacional.
+2. **Fix do Pipeline de PIX:** Criar um estado intermediário (ex: `PROCESSANDO_RECONCILIACAO`) ou regra de carência automática para impedir cancelamento por timeout caso exista uma chamada de reconciliação/webhook em processamento. Definir explicitamente o fluxo de estorno automático quando um PIX for confirmado em pedido já cancelado.
+3. **Proteção Financeira ao Lojista:** Adicionar à máquina de estados o pagamento de compensação de insumo ao lojista caso o pedido seja cancelado após o estado `PRONTO_PARA_ENVIO` por falta de entregadores.
+4. **Tratamento de Endereçamento Rural:** Incluir obrigatoriedade de seleção de localização via mapa (Pin Drop) e validação do indicador de precisão no cadastro do cliente para bairros com CEP genérico.
+5. **Ajuste de Auditoria de Dinheiro:** Remover a validação de pagamento em dinheiro exclusivamente por GPS e exigir validação de código PIN/OTP fornecido pelo cliente ou confirmação bilateral.
+6. **Sincronia de Fallback no Circuit Breaker:** Mapear no modelo de dados do pedido a identificação de qual Gateway gerou a cobrança para direcionar corretamente a reconciliação.
+
